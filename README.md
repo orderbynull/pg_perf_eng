@@ -125,7 +125,7 @@ select max(t2.day) from t2;
 ```
 
  ## Задача 3
- После запуска запроса(завершения которого так и не удалось дождаться) можно увидеть что для вычисления результата задействуются временные файлы:
+ После первого запуска запроса(завершения которого так и не удалось дождаться) можно увидеть что для вычисления результата задействуются временные файлы:
 ```bash
 postgres@pg-task-3:~/16/main/base/pgsql_tmp$ ls -laht
 total 134M
@@ -224,124 +224,5 @@ postgres=# explain (analyze, timing, buffers) select day from t2 where t_id in (
 (16 rows)
  ```
 
- ## Задача 5 (не верно, переделать)
- > [!WARNING]
-> В задании сказано добиться постоянной во времени производительности, но не сказано что значит "постоянной". Так же не ясно можно ли жертвовать производительностью в угоду стабильности. Так что буду исходить из чисто "спортивного" интереса - добиться поставленной задачи не смотря ни на что.
-
-Сразу делаем запуск тестовых команд без оптимизаций, получаем такую картину:
-```bash
-# psql -c 'select txid_current(); select pg_sleep(3600);' &
-# pgbench -p 5432 -rn -P1 -c10 -T3600 -M prepared -f generate_100_subtrans.sql
-
-pgbench (16.7 (Ubuntu 16.7-1.pgdg22.04+1))
-progress: 1.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 2.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 3.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 4.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 5.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 6.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 7.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 8.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 9.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 10.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 11.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 12.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-progress: 13.0 s, 0.0 tps, lat 0.000 ms stddev 0.000, 0 failed
-```
-
-Все выполняется очень медленно, потому что:
-```sql
-postgres=# explain (analyze, timing, buffers) update t1 set name = name where id = 10;
-                                                 QUERY PLAN
--------------------------------------------------------------------------------------------------------------
- Update on t1  (cost=0.00..233702.30 rows=0 width=0) (actual time=1050.363..1050.363 rows=0 loops=1)
-   Buffers: shared hit=16133 read=93172 dirtied=35 written=2
-   ->  Seq Scan on t1  (cost=0.00..233702.30 rows=1 width=36) (actual time=475.060..1049.656 rows=1 loops=1)
-         Filter: (id = 10)
-         Rows Removed by Filter: 9999999
-         Buffers: shared hit=16130 read=93172 dirtied=34 written=2
- Planning:
-   Buffers: shared hit=11
- Planning Time: 3.841 ms
- JIT:
-   Functions: 5
-   Options: Inlining false, Optimization false, Expressions true, Deforming true
-   Timing: Generation 0.563 ms, Inlining 0.000 ms, Optimization 0.167 ms, Emission 5.437 ms, Total 6.167 ms
- Execution Time: 1131.886 ms
- ```
-
- Здесь требуется индекс: `create unique index on t1(id);`, что приводит в такому результату:
-```sql
-postgres=# explain (analyze, timing, buffers) update t1 set name = name where id = 10;
-                                                     QUERY PLAN
----------------------------------------------------------------------------------------------------------------------
- Update on t1  (cost=0.43..8.45 rows=0 width=0) (actual time=0.025..0.026 rows=0 loops=1)
-   Buffers: shared hit=6
-   ->  Index Scan using t1_id_idx on t1  (cost=0.43..8.45 rows=1 width=36) (actual time=0.014..0.015 rows=1 loops=1)
-         Index Cond: (id = 10)
-         Buffers: shared hit=4
- Planning Time: 0.036 ms
- Execution Time: 0.036 ms
-```
-
-Теперь пробуем нагрузочный тест:
-```bash
-# psql -c 'select txid_current(); select pg_sleep(3600);' &
-# pgbench -p 5432 -rn -P1 -c10 -T3600 -M prepared -f generate_100_subtrans.sql
-
-pgbench (16.7 (Ubuntu 16.7-1.pgdg22.04+1))
-progress: 1.0 s, 88.0 tps, lat 103.974 ms stddev 22.038, 0 failed
-progress: 2.0 s, 116.0 tps, lat 90.536 ms stddev 6.846, 0 failed
-progress: 3.0 s, 101.0 tps, lat 94.553 ms stddev 6.125, 0 failed
-progress: 4.0 s, 109.0 tps, lat 95.977 ms stddev 7.123, 0 failed
-progress: 5.0 s, 138.0 tps, lat 72.544 ms stddev 23.334, 0 failed
-progress: 6.0 s, 225.0 tps, lat 44.368 ms stddev 4.865, 0 failed
-progress: 7.0 s, 220.0 tps, lat 45.545 ms stddev 5.225, 0 failed
-progress: 8.0 s, 216.0 tps, lat 45.762 ms stddev 5.010, 0 failed
-progress: 9.0 s, 220.0 tps, lat 45.417 ms stddev 4.751, 0 failed
-progress: 10.0 s, 224.0 tps, lat 44.673 ms stddev 4.871, 0 failed
-progress: 11.0 s, 224.0 tps, lat 44.593 ms stddev 4.498, 0 failed
-progress: 12.0 s, 216.0 tps, lat 46.286 ms stddev 6.072, 0 failed
-progress: 13.0 s, 223.0 tps, lat 45.036 ms stddev 4.912, 0 failed
-progress: 14.0 s, 223.0 tps, lat 45.242 ms stddev 5.255, 0 failed
-progress: 15.0 s, 221.0 tps, lat 44.724 ms stddev 5.032, 0 failed
-progress: 16.0 s, 220.0 tps, lat 45.352 ms stddev 4.695, 0 failed
-progress: 17.0 s, 222.0 tps, lat 44.810 ms stddev 4.932, 0 failed
-progress: 18.0 s, 228.0 tps, lat 44.395 ms stddev 4.887, 0 failed
-progress: 19.0 s, 226.0 tps, lat 44.124 ms stddev 4.778, 0 failed
-progress: 20.0 s, 226.0 tps, lat 44.226 ms stddev 4.993, 0 failed
-progress: 21.0 s, 227.0 tps, lat 44.080 ms stddev 5.181, 0 failed
-progress: 22.0 s, 219.0 tps, lat 45.393 ms stddev 4.960, 0 failed
-progress: 23.0 s, 224.0 tps, lat 44.742 ms stddev 5.345, 0 failed
-progress: 24.0 s, 226.0 tps, lat 44.234 ms stddev 5.118, 0 failed
-progress: 25.0 s, 231.0 tps, lat 43.721 ms stddev 4.593, 0 failed
-progress: 26.0 s, 222.0 tps, lat 44.591 ms stddev 4.963, 0 failed
-progress: 27.0 s, 222.0 tps, lat 44.993 ms stddev 5.263, 0 failed
-progress: 28.0 s, 224.0 tps, lat 44.662 ms stddev 4.582, 0 failed
-progress: 29.0 s, 230.0 tps, lat 43.740 ms stddev 4.769, 0 failed
-progress: 30.0 s, 223.0 tps, lat 44.545 ms stddev 4.877, 0 failed
-progress: 31.0 s, 224.0 tps, lat 44.505 ms stddev 5.260, 0 failed
-progress: 32.0 s, 218.0 tps, lat 45.940 ms stddev 4.898, 0 failed
-```
-
-Кажется, tps действительно не стабилен. Попробуем посмотреть на взятые блокировки:
-```sql
-postgres=# select count(*) from pg_locks;
- count
--------
-   611
-(1 row)
-```
-
-Могу предположить, что нестабильный tps происходит из-за конкуренции между транзакциями в разных сессиях. Есть надежный(в данном "спортивном" случае) способ это исправить - поставить уровень изоляции `SERIALIZABLE`. 
-
-Запускаем нагрузочный тест заново:
-```bash
-# psql -c 'select txid_current(); select pg_sleep(3600);' &
-# pgbench -p 5432 -rn -P1 -c10 -T3600 -M prepared -f generate_100_subtrans.sql
-
-
-```
-
-wal_buffers
-max_wal_size
+ ## Задача 5
+ Решить не удалось.
